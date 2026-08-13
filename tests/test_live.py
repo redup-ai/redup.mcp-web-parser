@@ -20,7 +20,7 @@ _UPSTREAM = (
 @pytest.mark.live
 @pytest.mark.skipif(not _UPSTREAM, reason="McpWebParser___upstream_base_url not set")
 @pytest.mark.asyncio
-async def test_live_health_and_parse():
+async def test_live_parse():
     config = ServerConfig(
         upstream_base_url=_UPSTREAM,
         default_proxy=(
@@ -32,8 +32,6 @@ async def test_live_health_and_parse():
         delay_before_return_html=1.0,
     )
     client = Crawl4AIClient(config)
-    health = await client.check_health()
-    assert health.get("ok") is True
     result = await client.parse_page("https://example.com/")
     assert result.success is True
     assert "Example" in result.markdown or len(result.markdown) > 0

@@ -56,10 +56,6 @@ def crawl_endpoint(base_url: str) -> str:
     return f"{api}/crawl"
 
 
-def health_endpoint(base_url: str) -> str:
-    return f"{(base_url or '').strip().rstrip('/')}/health"
-
-
 def _auth_headers(token: str) -> dict[str, str]:
     auth = (token or "").strip()
     if not auth:
@@ -74,36 +70,6 @@ class Crawl4AIClient:
 
     def __init__(self, config: ServerConfig):
         self._config = config
-
-    async def check_health(self) -> dict[str, Any]:
-        url = health_endpoint(self._config.upstream_base_url)
-        timeout = httpx.Timeout(self._config.request_timeout_seconds)
-        headers = _auth_headers(self._config.upstream_token)
-        try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                resp = await client.get(url, headers=headers)
-        except httpx.HTTPError as exc:
-            raise UpstreamError(f"upstream health request failed: {exc}") from exc
-
-        body: Any
-        try:
-            body = resp.json()
-        except ValueError:
-            body = {"raw": (resp.text or "")[:500]}
-
-        if resp.status_code >= 400:
-            raise UpstreamError(
-                f"upstream health HTTP {resp.status_code}: {body!s}"[:500],
-                status_code=resp.status_code,
-            )
-        if isinstance(body, dict):
-            return {
-                "ok": True,
-                "status_code": resp.status_code,
-                "upstream_status": body.get("status"),
-                "upstream_version": body.get("version"),
-            }
-        return {"ok": True, "status_code": resp.status_code, "body": body}
 
     async def parse_page(
         self,

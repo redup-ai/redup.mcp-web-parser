@@ -22,7 +22,7 @@ MCP Streamable HTTP service that parses web pages into cleaned markdown via
 - Targeted at Crawl4AI **0.8.x** (per-request `proxy_config` works). On 0.9+
   Docker API may reject `proxy` / `proxy_config` in the request body.
 
-Contract: MCP tools `parse_page`, `fetch_binary`, `check_upstream`.
+Contract: MCP tools `parse_page`, `fetch_binary`.
 Endpoint: `POST http://<host>:8000/mcp` (stateless Streamable HTTP, JSON).
 Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
 
@@ -31,7 +31,6 @@ Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
   (`is_binary=true` → switch to `fetch_binary`).
 - `fetch_binary` — download binary files (pdf/docx/zip/images/…). Download only
   (no OCR/unzip). Not a fallback when HTML `parse_page` fails.
-- `check_upstream` — upstream health/version.
 
 **Agent registration example:** `{"id":"web-parser","url":"http://…:8000/mcp"}`
 → LLM names `mcp__web-parser__parse_page` / `mcp__web-parser__fetch_binary`.

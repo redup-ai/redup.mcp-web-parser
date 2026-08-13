@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Annotated
 
 from fastmcp import FastMCP
@@ -187,33 +186,5 @@ def create_server(config: ServerConfig) -> FastMCP:
                     used_proxy=bool(config.default_proxy),
                 ).to_json()
             return result.to_json()
-
-    @mcp.tool(
-        annotations={
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        }
-    )
-    async def check_upstream() -> str:
-        """Check whether the page-parser upstream is healthy. No URL needed.
-
-        WHEN TO USE: user asks if the crawler/parser backend is up, or its version.
-        Returns JSON: ok, status_code, upstream_status, upstream_version.
-        """
-        async with tracked_work("check_upstream"):
-            try:
-                payload = await crawl_client.check_health()
-            except UpstreamError as exc:
-                return json.dumps(
-                    {
-                        "ok": False,
-                        "error": str(exc)[:500],
-                        "status_code": exc.status_code,
-                    },
-                    ensure_ascii=False,
-                )
-            return json.dumps(payload, ensure_ascii=False)
 
     return mcp
