@@ -1,0 +1,18 @@
+service:
+  console_log_level: INFO
+  host: "0.0.0.0"
+  port: 8000
+  path: /mcp
+  max_workers: 4
+  hpa_max_workers: 2
+
+McpWebParser:
+  upstream_base_url: ""
+  upstream_token: ""
+  default_proxy: ""
+  request_timeout_seconds: 120
+  max_timeout_seconds: 300
+  max_markdown_chars: 100000
+  delay_before_return_html: 2.5
+  json_response: true
+  stateless_http: true

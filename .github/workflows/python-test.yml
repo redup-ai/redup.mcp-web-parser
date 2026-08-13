@@ -1,0 +1,30 @@
+name: Test Python Package
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install and test
+        run: |
+          uv sync --dev
+          uv run ruff check .
+          uv run pytest tests/ -q -m "not live"

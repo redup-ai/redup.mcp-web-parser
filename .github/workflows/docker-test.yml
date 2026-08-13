@@ -1,0 +1,27 @@
+name: Test Docker Image
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+        - base_image: "python:3.13-slim"
+          tag_suffix: "3.13-slim"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+          tags: ${{ secrets.DOCKERHUB_USER }}/${{ github.event.repository.name }}:latest
