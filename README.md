@@ -9,6 +9,8 @@ MCP Streamable HTTP service that parses web pages into cleaned markdown via
 ## Model
 
 - Thin MCP façade over Crawl4AI HTTP API — **no browser** in this image.
+- Crawl requests set ``exclude_all_images`` (and disable screenshot/pdf) so
+  upstream payloads stay small; markdown and links are unchanged for tools.
 - **`upstream_base_url` is required** at runtime (config or
   `McpWebParser___upstream_base_url`). Defaults ship **empty** (OSS-safe: no
   cluster hostnames or internal proxies in the repo).

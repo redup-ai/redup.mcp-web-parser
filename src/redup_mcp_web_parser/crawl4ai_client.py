@@ -29,6 +29,9 @@ def build_crawl_payload(
         "verbose": False,
         "log_console": False,
         "page_timeout": int(page_timeout_ms),
+        "exclude_all_images": True,
+        "screenshot": False,
+        "pdf": False,
     }
     clean_proxy = (proxy or "").strip()
     if clean_proxy:

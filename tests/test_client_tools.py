@@ -40,6 +40,9 @@ def test_build_crawl_payload_proxy_on_off():
     assert with_proxy["crawler_config"]["proxy_config"] == {
         "server": "http://user:pass@proxy.example:3128"
     }
+    assert bare["crawler_config"]["exclude_all_images"] is True
+    assert bare["crawler_config"]["screenshot"] is False
+    assert bare["crawler_config"]["pdf"] is False
     assert crawl_endpoint("http://host:11235/") == "http://host:11235/crawl"
     assert crawl_endpoint("http://host:11235/crawl") == "http://host:11235/crawl"
 
