@@ -106,7 +106,6 @@ class Crawl4AIClient:
         self,
         page_url: str,
         *,
-        proxy: str = "",
         timeout_seconds: float | None = None,
     ) -> ParseResult:
         timeout_s = self._config.clamp_timeout(timeout_seconds)
@@ -114,6 +113,7 @@ class Crawl4AIClient:
         # HTTP read timeout slightly above page_timeout (Airflow-style headroom).
         read_s = max(120.0, timeout_s + 30.0)
         http_timeout = httpx.Timeout(connect=60.0, read=read_s, write=60.0, pool=60.0)
+        proxy = self._config.default_proxy
         payload = build_crawl_payload(
             page_url,
             proxy=proxy,
@@ -125,7 +125,7 @@ class Crawl4AIClient:
             "Content-Type": "application/json",
             **_auth_headers(self._config.upstream_token),
         }
-        used_proxy = bool((proxy or "").strip())
+        used_proxy = bool(proxy)
 
         try:
             async with httpx.AsyncClient(timeout=http_timeout, follow_redirects=True) as client:

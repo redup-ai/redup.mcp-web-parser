@@ -18,7 +18,7 @@ def test_config_requires_upstream():
         ServerConfig(upstream_base_url="", require_upstream=True)
 
 
-def test_config_from_servicekit_and_proxy_override():
+def test_config_from_servicekit_and_proxy():
     cfg = ServerConfig.from_servicekit(
         {
             "service": {"host": "0.0.0.0", "port": 8000, "path": "/mcp"},
@@ -31,8 +31,6 @@ def test_config_from_servicekit_and_proxy_override():
     )
     assert cfg.upstream_base_url == "https://example.test/c4ai"
     assert cfg.default_proxy == "http://proxy.example:3128"
-    assert cfg.effective_proxy("") == "http://proxy.example:3128"
-    assert cfg.effective_proxy("  http://other:1  ") == "http://other:1"
     assert cfg.clamp_timeout(999) == cfg.max_timeout_seconds
     assert cfg.clamp_timeout(None) == cfg.request_timeout_seconds
 

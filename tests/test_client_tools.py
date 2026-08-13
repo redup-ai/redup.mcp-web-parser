@@ -53,9 +53,10 @@ class _Transport(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.asyncio
-async def test_client_parse_page_posts_proxy(
+async def test_client_parse_page_uses_config_proxy(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
+    config.default_proxy = "http://proxy.example:3128"
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -89,11 +90,7 @@ async def test_client_parse_page_posts_proxy(
     monkeypatch.setattr(httpx, "AsyncClient", factory)
 
     client = Crawl4AIClient(config)
-    result = await client.parse_page(
-        "https://example.com/",
-        proxy="http://proxy.example:3128",
-        timeout_seconds=10,
-    )
+    result = await client.parse_page("https://example.com/", timeout_seconds=10)
     assert result.success is True
     assert result.markdown == "# Hi"
     assert result.used_proxy is True
@@ -104,7 +101,7 @@ async def test_client_parse_page_posts_proxy(
 
 
 @pytest.mark.asyncio
-async def test_parse_page_tool_uses_default_proxy(
+async def test_parse_page_tool_schema_has_no_proxy_arg(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
     config.default_proxy = "http://default-proxy:3128"
@@ -143,7 +140,11 @@ async def test_parse_page_tool_uses_default_proxy(
     server = create_server(config)
     tools = await server.get_tools()
     assert "parse_page" in tools
-    assert "check_upstream" in tools
+    schema = tools["parse_page"].parameters
+    props = (schema or {}).get("properties") or {}
+    assert "proxy" not in props
+    assert "url" in props
+
     out = await tools["parse_page"].run({"url": "https://example.com/"})
     text = _tool_text(out)
     payload = json.loads(text)

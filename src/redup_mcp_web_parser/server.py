@@ -18,16 +18,6 @@ _UrlArg = Annotated[
     str,
     Field(description="Absolute http(s) URL of the page to parse."),
 ]
-_ProxyArg = Annotated[
-    str,
-    Field(
-        description=(
-            "Optional HTTP(S) proxy URL for Crawl4AI egress "
-            "(overrides server default_proxy when non-empty). "
-            "Example: http://user:pass@host:3128"
-        ),
-    ),
-]
 _TimeoutArg = Annotated[
     float,
     Field(description="Max crawl time in seconds (clamped to server max)."),
@@ -49,14 +39,12 @@ def create_server(config: ServerConfig) -> FastMCP:
     )
     async def parse_page(
         url: _UrlArg,
-        proxy: _ProxyArg = "",
         timeout: _TimeoutArg = config.request_timeout_seconds,
     ) -> str:
         """Fetch a web page via Crawl4AI and return cleaned markdown JSON.
 
-        Uses Crawl4AI ``POST /crawl`` (0.8.x). When a proxy is set (tool arg or
-        server ``default_proxy``), Crawl4AI fetches through
-        ``crawler_config.proxy_config.server`` so egress IP is the proxy.
+        Uses Crawl4AI ``POST /crawl`` (0.8.x). Egress proxy (if any) comes from
+        server config ``default_proxy``, not from tool arguments.
 
         Returns JSON: success, url, status_code, markdown, error_message,
         links_internal, links_external, truncated, used_proxy.
@@ -70,11 +58,9 @@ def create_server(config: ServerConfig) -> FastMCP:
                     error_message="url must be an absolute http(s) URL",
                 ).to_json()
 
-            effective_proxy = config.effective_proxy(proxy)
             try:
                 result = await client.parse_page(
                     page_url,
-                    proxy=effective_proxy,
                     timeout_seconds=timeout,
                 )
             except UpstreamError as exc:
@@ -83,7 +69,7 @@ def create_server(config: ServerConfig) -> FastMCP:
                     url=page_url,
                     status_code=exc.status_code,
                     error_message=str(exc)[:2000],
-                    used_proxy=bool(effective_proxy),
+                    used_proxy=bool(config.default_proxy),
                 ).to_json()
             return result.to_json()
 

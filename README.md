@@ -12,9 +12,9 @@ MCP Streamable HTTP service that parses web pages into cleaned markdown via
 - **`upstream_base_url` is required** at runtime (config or
   `McpWebParser___upstream_base_url`). Defaults ship **empty** (OSS-safe: no
   cluster hostnames or internal proxies in the repo).
-- Optional **egress proxy** for Crawl4AI IP substitution:
-  `crawler_config.proxy_config.server`. Set `default_proxy` and/or pass tool
-  arg `proxy`. Empty proxy = direct fetch (supported).
+- Optional **egress proxy** for Crawl4AI IP substitution via server config
+  `default_proxy` → `crawler_config.proxy_config.server`. Empty = direct fetch.
+  Proxy is **not** a tool argument (deploy/runtime only).
 - Tool results are **JSON** (`success` / `markdown` / `status_code` / …),
   not a concatenated text dump.
 - Targeted at Crawl4AI **0.8.x** (per-request `proxy_config` works). On 0.9+
@@ -24,8 +24,8 @@ Contract: MCP tools `parse_page`, `check_upstream`.
 Endpoint: `POST http://<host>:8000/mcp` (stateless Streamable HTTP, JSON).
 Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
 
-**Tool args:** `parse_page` takes **`url`** (required), optional **`proxy`**,
-optional **`timeout`** (seconds). `check_upstream` has no args (`GET /health`).
+**Tool args:** `parse_page` takes **`url`** (required), optional **`timeout`**
+(seconds). `check_upstream` has no args (`GET /health`).
 
 **Agent registration example:** `{"id":"web-parser","url":"http://…:8000/mcp"}`
 → LLM names `mcp__web-parser__parse_page`.

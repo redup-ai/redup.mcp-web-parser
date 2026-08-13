@@ -70,12 +70,6 @@ class ServerConfig:
             return float(self.request_timeout_seconds)
         return max(1.0, min(float(timeout), float(self.max_timeout_seconds)))
 
-    def effective_proxy(self, override: str | None) -> str:
-        """Resolve proxy: non-empty tool override wins, else config default."""
-        if override is not None and str(override).strip():
-            return str(override).strip()
-        return self.default_proxy
-
     @classmethod
     def from_servicekit(cls, config: Mapping[str, Any]) -> ServerConfig:
         """Build from a servicekit YAML dict (`service` + `McpWebParser`)."""
