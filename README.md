@@ -44,7 +44,6 @@ service:
   hpa_max_workers: 2
 
 McpWebParser:
-  # REQUIRED via env in deploy — leave empty in the checked-in file
   upstream_base_url: ""
   upstream_token: ""
   default_proxy: ""
