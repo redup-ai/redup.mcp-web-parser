@@ -13,8 +13,8 @@ from redup_mcp_web_parser.crawl4ai_client import Crawl4AIClient
 from redup_mcp_web_parser.errors import UpstreamError
 from redup_mcp_web_parser.http_fetch import (
     DirectHttpClient,
-    is_pdf_content_type,
-    url_looks_like_pdf,
+    url_has_pdf_extension,
+    url_suggests_pdf,
 )
 from redup_mcp_web_parser.metrics import tracked_work
 from redup_mcp_web_parser.output import PDF_PARSE_HINT, FetchPdfResult, ParseResult
@@ -36,14 +36,14 @@ def create_server(config: ServerConfig) -> FastMCP:
     http_client = DirectHttpClient(config)
 
     async def _reject_if_pdf(page_url: str, timeout: float) -> ParseResult | None:
-        """Return a clear PDF rejection payload, or None if not a PDF."""
-        # Fast path: obvious PDF URLs — still probe when possible for status/ctype.
+        """Return a clear PDF rejection payload, or None if not a hard PDF."""
         try:
             probe = await http_client.probe_content_type(
                 page_url, timeout_seconds=min(timeout, 30.0)
             )
         except UpstreamError:
-            if url_looks_like_pdf(page_url):
+            # Without a probe, only a ``.pdf`` extension is a hard signal.
+            if url_has_pdf_extension(page_url):
                 return ParseResult(
                     success=False,
                     url=page_url,
@@ -55,18 +55,18 @@ def create_server(config: ServerConfig) -> FastMCP:
                 )
             return None
 
-        if probe.get("is_pdf") or is_pdf_content_type(probe.get("content_type")):
-            return ParseResult(
-                success=False,
-                url=str(probe.get("url") or page_url),
-                status_code=probe.get("status_code"),
-                content_type=probe.get("content_type") or "application/pdf",
-                is_pdf=True,
-                error_message=PDF_PARSE_HINT,
-                hint="Use fetch_pdf to download this PDF.",
-                used_proxy=bool(probe.get("used_proxy")),
-            )
-        return None
+        if not probe.get("is_pdf"):
+            return None
+        return ParseResult(
+            success=False,
+            url=str(probe.get("url") or page_url),
+            status_code=probe.get("status_code"),
+            content_type=probe.get("content_type") or "application/pdf",
+            is_pdf=True,
+            error_message=PDF_PARSE_HINT,
+            hint="Use fetch_pdf to download this PDF.",
+            used_proxy=bool(probe.get("used_proxy")),
+        )
 
     @mcp.tool(
         annotations={
@@ -82,8 +82,13 @@ def create_server(config: ServerConfig) -> FastMCP:
     ) -> str:
         """Fetch an HTML page via Crawl4AI and return cleaned markdown JSON.
 
-        Does **not** parse PDF bodies. If the URL is a PDF, returns
-        ``is_pdf=true`` and tells you to call ``fetch_pdf``.
+        Does **not** parse PDF bodies. If the URL is a confirmed PDF
+        (Content-Type / ``%PDF`` / ``.pdf``), returns ``is_pdf=true`` and
+        tells you to call ``fetch_pdf`` (or an HTML mirror of the document
+        when one exists).
+
+        On failure: return the error — do not retry the same URL in a loop
+        and do not call ``fetch_pdf`` as a fallback for HTML pages.
 
         Egress proxy (if any) comes from server config ``default_proxy``.
 
@@ -111,12 +116,11 @@ def create_server(config: ServerConfig) -> FastMCP:
                 )
             except UpstreamError as exc:
                 msg = str(exc)
-                # Crawl4AI often anti-bot-blocks PDF URLs; rephrase for the agent.
-                if url_looks_like_pdf(page_url) or "minimal_text" in msg.lower():
+                if url_suggests_pdf(page_url) or "minimal_text" in msg.lower():
                     maybe = await _reject_if_pdf(page_url, min(timeout, 30.0))
                     if maybe is not None:
                         return maybe.to_json()
-                    if url_looks_like_pdf(page_url):
+                    if url_has_pdf_extension(page_url):
                         return ParseResult(
                             success=False,
                             url=page_url,
@@ -150,9 +154,12 @@ def create_server(config: ServerConfig) -> FastMCP:
     ) -> str:
         """Download a PDF via HTTP (server ``default_proxy`` if configured).
 
-        Returns JSON with ``content_base64`` (truncated if larger than
-        ``max_pdf_bytes``). Does not extract text — use for file transfer.
-        For HTML pages use ``parse_page`` instead.
+        Use only for real PDF URLs. Not a fallback when ``parse_page`` fails on
+        HTML. Does not extract text — returns metadata plus ``content_base64``
+        (placed last in the JSON object).
+
+        Returns JSON: success, url, status_code, media_type, size, filename,
+        truncated, error_message, used_proxy, content_base64.
         """
         async with tracked_work("fetch_pdf"):
             page_url = (url or "").strip()

@@ -26,11 +26,12 @@ Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
 
 **Tool args:**
 - `parse_page` — **`url`**, optional **`timeout`**. HTML only via Crawl4AI.
-  If the URL is a PDF (`Content-Type` / `.pdf`), returns `is_pdf=true` and a
-  clear hint to call `fetch_pdf` (no cryptic Crawl4AI anti-bot error).
-- `fetch_pdf` — **`url`**, optional **`timeout`**. Downloads the PDF over HTTP
-  (same `default_proxy` as crawl) and returns `content_base64` (capped by
-  `max_pdf_bytes`). Does not OCR/extract text.
+  Confirmed PDFs (`Content-Type` / `%PDF` / `.pdf`) return `is_pdf=true` and a
+  hint to call `fetch_pdf`. A bare `/pdf/` path is not enough when the response
+  type is clearly non-PDF.
+- `fetch_pdf` — **`url`**, optional **`timeout`**. Downloads a PDF over HTTP
+  (same `default_proxy`). Rejects non-PDF Content-Types. JSON puts small fields
+  before `content_base64`. Not a fallback for failed HTML parses.
 - `check_upstream` — no args (`GET /health`).
 
 **Agent registration example:** `{"id":"web-parser","url":"http://…:8000/mcp"}`

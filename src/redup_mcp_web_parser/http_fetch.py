@@ -16,24 +16,76 @@ from redup_mcp_web_parser.output import FetchPdfResult
 
 logger = logging.getLogger(__name__)
 
-_PDF_URL_RE = re.compile(r"\.pdf(\?|#|$)", re.IGNORECASE)
+_PDF_EXT_RE = re.compile(r"\.pdf(\?|#|$)", re.IGNORECASE)
+_PDF_PATH_RE = re.compile(r"/pdf(/|$)", re.IGNORECASE)
 
 
-def url_looks_like_pdf(url: str) -> bool:
-    """Heuristic: path ends with .pdf or common /pdf/ document hosts."""
+def url_has_pdf_extension(url: str) -> bool:
+    """True when the URL path ends with ``.pdf``."""
+    return bool(_PDF_EXT_RE.search((url or "").strip()))
+
+
+def url_suggests_pdf(url: str) -> bool:
+    """Soft URL heuristic: ``.pdf`` extension or a ``/pdf/`` path segment.
+
+    Soft only — not sufficient alone when Content-Type is a non-PDF type.
+    """
     raw = (url or "").strip()
     if not raw:
         return False
-    if _PDF_URL_RE.search(raw):
+    if url_has_pdf_extension(raw):
         return True
-    path = urlparse(raw).path.lower()
-    # arxiv.org/pdf/<id>, similar patterns
-    return "/pdf/" in path or path.endswith("/pdf")
+    return bool(_PDF_PATH_RE.search(urlparse(raw).path))
+
+
+# Back-compat alias.
+url_looks_like_pdf = url_suggests_pdf
 
 
 def is_pdf_content_type(content_type: str | None) -> bool:
     ctype = (content_type or "").split(";")[0].strip().lower()
     return ctype == "application/pdf" or ctype.endswith("/pdf")
+
+
+def is_clearly_non_pdf_content_type(content_type: str | None) -> bool:
+    """True when Content-Type clearly is not a PDF body."""
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    if not ctype or is_pdf_content_type(ctype):
+        return False
+    if ctype.startswith(("text/", "image/", "audio/", "video/", "font/")):
+        return True
+    if ctype in {
+        "application/json",
+        "application/javascript",
+        "application/xml",
+        "application/xhtml+xml",
+        "application/atom+xml",
+        "application/rss+xml",
+    }:
+        return True
+    # application/octet-stream is ambiguous — not clearly non-PDF.
+    return "html" in ctype or "xml" in ctype or "json" in ctype
+
+
+def decide_is_pdf(
+    *,
+    url: str,
+    content_type: str | None,
+    body_prefix: bytes = b"",
+) -> bool:
+    """Hard PDF decision for parse_page reject / probe.
+
+    Priority: ``%PDF`` magic → Content-Type → ``.pdf`` extension when type is
+    missing/ambiguous. A bare ``/pdf/`` path is never enough if type is non-PDF.
+    """
+    if body_prefix.lstrip().startswith(b"%PDF"):
+        return True
+    if is_pdf_content_type(content_type):
+        return True
+    if is_clearly_non_pdf_content_type(content_type):
+        return False
+    # No decisive type: trust .pdf extension only (not /pdf/ alone).
+    return url_has_pdf_extension(url)
 
 
 def filename_from_response(url: str, headers: httpx.Headers) -> str:
@@ -70,10 +122,11 @@ class DirectHttpClient:
         *,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        """HEAD (fallback GET) to learn Content-Type without downloading a body."""
+        """HEAD / ranged GET to learn Content-Type and optional ``%PDF`` magic."""
         timeout_s = self._config.clamp_timeout(timeout_seconds)
         proxy = _httpx_proxy(self._config.default_proxy)
         headers = {"User-Agent": "redup-mcp-web-parser/0.2"}
+        body_prefix = b""
         try:
             async with httpx.AsyncClient(
                 timeout=_client_timeout(timeout_s),
@@ -81,22 +134,36 @@ class DirectHttpClient:
                 proxy=proxy,
             ) as client:
                 resp = await client.head(url, headers=headers)
-                # Some hosts reject HEAD or omit content-type.
-                if resp.status_code >= 400 or not resp.headers.get("content-type"):
+                ctype = resp.headers.get("content-type")
+                # Need body peek when HEAD lacks type, or URL soft-suggests PDF.
+                need_peek = (
+                    resp.status_code >= 400
+                    or not ctype
+                    or (
+                        url_suggests_pdf(str(resp.url) or url)
+                        and not is_pdf_content_type(ctype)
+                    )
+                )
+                if need_peek:
                     resp = await client.get(
                         url,
-                        headers={**headers, "Range": "bytes=0-0"},
+                        headers={**headers, "Range": "bytes=0-15"},
                     )
+                    body_prefix = resp.content or b""
         except httpx.HTTPError as exc:
             raise UpstreamError(f"content-type probe failed: {exc}") from exc
 
         final_url = str(resp.url)
         ctype = resp.headers.get("content-type")
+        is_pdf = decide_is_pdf(
+            url=final_url, content_type=ctype, body_prefix=body_prefix
+        )
         return {
             "url": final_url,
             "status_code": resp.status_code,
             "content_type": ctype,
-            "is_pdf": is_pdf_content_type(ctype) or url_looks_like_pdf(final_url),
+            "is_pdf": is_pdf,
+            "url_suggests_pdf": url_suggests_pdf(final_url),
             "used_proxy": bool(proxy),
         }
 
@@ -138,10 +205,8 @@ class DirectHttpClient:
                         used_proxy=used_proxy,
                     )
 
-                # Early reject obvious non-PDF when type is present.
-                if ctype and not is_pdf_content_type(ctype) and not url_looks_like_pdf(
-                    final_url
-                ):
+                # Prefer Content-Type over URL path heuristics.
+                if ctype and is_clearly_non_pdf_content_type(ctype):
                     return FetchPdfResult(
                         success=False,
                         url=final_url,
@@ -164,7 +229,6 @@ class DirectHttpClient:
                     total += len(chunk)
                     if total > max_bytes:
                         truncated = True
-                        # keep only up to max_bytes
                         remain = max_bytes - (total - len(chunk))
                         if remain > 0:
                             chunks.append(chunk[:remain])
@@ -175,8 +239,7 @@ class DirectHttpClient:
             raise UpstreamError(f"pdf download failed: {exc}") from exc
 
         data = b"".join(chunks)
-        # Magic-byte check when content-type was missing/wrong.
-        if not data.startswith(b"%PDF") and not is_pdf_content_type(ctype):
+        if not data.lstrip().startswith(b"%PDF"):
             return FetchPdfResult(
                 success=False,
                 url=final_url,
@@ -205,8 +268,8 @@ class DirectHttpClient:
             media_type=ctype or "application/pdf",
             size=len(data),
             filename=filename,
-            content_base64=b64,
             truncated=truncated,
             error_message=err,
             used_proxy=used_proxy,
+            content_base64=b64,
         )

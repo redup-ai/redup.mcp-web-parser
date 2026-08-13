@@ -6,7 +6,13 @@ import pytest
 
 from redup_mcp_web_parser.config import ServerConfig
 from redup_mcp_web_parser.errors import ConfigError
+from redup_mcp_web_parser.http_fetch import (
+    decide_is_pdf,
+    url_has_pdf_extension,
+    url_suggests_pdf,
+)
 from redup_mcp_web_parser.output import (
+    FetchPdfResult,
     markdown_from_api_item,
     parse_crawl_api_response,
     truncate_markdown,
@@ -82,3 +88,51 @@ def test_parse_crawl_api_response_empty():
     )
     assert result.success is False
     assert result.error_message == "empty_results"
+
+
+def test_pdf_url_heuristics_and_decide():
+    assert url_has_pdf_extension("https://x.example/a.pdf")
+    assert not url_has_pdf_extension("https://docs.example/pdf/2510.16927")
+    assert url_suggests_pdf("https://docs.example/pdf/2510.16927")
+    assert decide_is_pdf(
+        url="https://docs.example/pdf/2510.16927",
+        content_type="application/pdf",
+    )
+    assert not decide_is_pdf(
+        url="https://docs.example/pdf/img/table-word.pdf",
+        content_type="text/html",
+    )
+    assert decide_is_pdf(
+        url="https://example.com/file",
+        content_type="text/html",
+        body_prefix=b"%PDF-1.4",
+    )
+    assert decide_is_pdf(
+        url="https://example.com/doc.pdf",
+        content_type=None,
+    )
+    assert not decide_is_pdf(
+        url="https://docs.example/pdf/2510.16927",
+        content_type=None,
+    )
+
+
+def test_fetch_pdf_result_json_puts_base64_last():
+    raw = FetchPdfResult(
+        success=True,
+        url="https://example.com/a.pdf",
+        status_code=200,
+        media_type="application/pdf",
+        size=3,
+        filename="a.pdf",
+        truncated=False,
+        error_message="",
+        used_proxy=True,
+        content_base64="QUJD",
+    ).to_json()
+    assert '"used_proxy": true' in raw
+    assert raw.index('"used_proxy"') < raw.index('"content_base64"')
+    assert raw.rstrip().endswith('}')
+    # last property before closing brace is content_base64
+    assert '"content_base64": "QUJD"' in raw
+    assert raw.index('"filename"') < raw.index('"content_base64"')

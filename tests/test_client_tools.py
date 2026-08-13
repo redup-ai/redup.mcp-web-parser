@@ -190,7 +190,7 @@ async def test_parse_page_rejects_pdf_clearly(
     server = create_server(config)
     tools = await server.get_tools()
     out = await tools["parse_page"].run(
-        {"url": "https://arxiv.org/pdf/2510.16927"}
+        {"url": "https://example.com/papers/2510.16927.pdf"}
     )
     payload = json.loads(_tool_text(out))
     assert payload["success"] is False
@@ -235,3 +235,93 @@ async def test_fetch_pdf_returns_base64(
     assert payload["filename"] == "paper.pdf"
     assert payload["size"] == len(pdf_bytes)
     assert payload["content_base64"]
+    # Metadata fields should appear before content_base64 in the JSON object.
+    keys = list(payload.keys())
+    assert keys[-1] == "content_base64"
+    assert keys.index("used_proxy") < keys.index("content_base64")
+    assert keys.index("filename") < keys.index("content_base64")
+
+
+@pytest.mark.asyncio
+async def test_parse_page_does_not_hard_reject_pdf_path_with_html(
+    monkeypatch: pytest.MonkeyPatch, config: ServerConfig
+):
+    """``/pdf/`` path + ``text/html`` must not set ``is_pdf``."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method in {"HEAD", "GET"} and "example.com" in str(request.url):
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html; charset=utf-8"},
+                content=b"<html>choices</html>",
+            )
+        if request.url.path.endswith("/crawl"):
+            captured["crawled"] = True
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "results": [
+                        {
+                            "success": True,
+                            "url": str(request.url),
+                            "status_code": 200,
+                            "markdown": {"raw_markdown": "# choices"},
+                            "links": {},
+                            "error_message": "",
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    transport = _Transport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    server = create_server(config)
+    tools = await server.get_tools()
+    out = await tools["parse_page"].run(
+        {"url": "https://example.com/docs/pdf/img/table-word.pdf"}
+    )
+    payload = json.loads(_tool_text(out))
+    assert payload.get("is_pdf") is not True
+    assert captured.get("crawled") is True
+    assert payload.get("success") is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_pdf_rejects_html_content_type(
+    monkeypatch: pytest.MonkeyPatch, config: ServerConfig
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            300,
+            headers={"content-type": "text/html"},
+            content=b"<html>not a pdf</html>",
+        )
+
+    transport = _Transport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    server = create_server(config)
+    tools = await server.get_tools()
+    out = await tools["fetch_pdf"].run(
+        {"url": "https://example.com/docs/pdf/thing"}
+    )
+    payload = json.loads(_tool_text(out))
+    assert payload["success"] is False
+    assert "Content-Type" in payload["error_message"]
+    assert not payload.get("content_base64")

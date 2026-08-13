@@ -9,7 +9,7 @@ from typing import Any
 
 @dataclass
 class ParseResult:
-    """Agent-facing parse payload."""
+    """Parse payload for MCP tool results."""
 
     success: bool
     url: str
@@ -30,7 +30,11 @@ class ParseResult:
 
 @dataclass
 class FetchPdfResult:
-    """Agent-facing PDF download payload."""
+    """PDF download payload for MCP tool results.
+
+    Large binary fields are last so truncated JSON previews still show
+    metadata (``size``, ``filename``, …).
+    """
 
     success: bool
     url: str
@@ -38,10 +42,10 @@ class FetchPdfResult:
     media_type: str | None = None
     size: int = 0
     filename: str = ""
-    content_base64: str = ""
     truncated: bool = False
     error_message: str = ""
     used_proxy: bool = False
+    content_base64: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -50,7 +54,7 @@ class FetchPdfResult:
 PDF_PARSE_HINT = (
     "This URL is a PDF. parse_page only extracts HTML pages via Crawl4AI. "
     "Call fetch_pdf to download the file (base64), or open an HTML version "
-    "of the document if available (e.g. arXiv /abs or /html)."
+    "of the document if available."
 )
 
 
