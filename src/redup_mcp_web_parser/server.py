@@ -8,24 +8,38 @@ from typing import Annotated
 from fastmcp import FastMCP
 from pydantic import Field
 
+from redup_mcp_web_parser.binary_types import (
+    url_extension,
+    url_has_binary_extension,
+    url_suggests_binary,
+)
 from redup_mcp_web_parser.config import ServerConfig
 from redup_mcp_web_parser.crawl4ai_client import Crawl4AIClient
 from redup_mcp_web_parser.errors import UpstreamError
-from redup_mcp_web_parser.http_fetch import (
-    DirectHttpClient,
-    url_has_pdf_extension,
-    url_suggests_pdf,
-)
+from redup_mcp_web_parser.http_fetch import DirectHttpClient
 from redup_mcp_web_parser.metrics import tracked_work
-from redup_mcp_web_parser.output import PDF_PARSE_HINT, FetchPdfResult, ParseResult
+from redup_mcp_web_parser.output import (
+    BINARY_PARSE_HINT,
+    FetchBinaryResult,
+    ParseResult,
+)
 
-_UrlArg = Annotated[
+_PageUrlArg = Annotated[
     str,
-    Field(description="Absolute http(s) URL of the page or PDF."),
+    Field(description="http(s) URL of an HTML page (not a PDF/ZIP/DOCX file)."),
+]
+_FileUrlArg = Annotated[
+    str,
+    Field(
+        description=(
+            "http(s) URL of a binary file to download "
+            "(pdf, docx, zip, png, … — not an HTML page)."
+        )
+    ),
 ]
 _TimeoutArg = Annotated[
     float,
-    Field(description="Max request time in seconds (clamped to server max)."),
+    Field(description="Request timeout in seconds (server may clamp)."),
 ]
 
 
@@ -35,36 +49,37 @@ def create_server(config: ServerConfig) -> FastMCP:
     crawl_client = Crawl4AIClient(config)
     http_client = DirectHttpClient(config)
 
-    async def _reject_if_pdf(page_url: str, timeout: float) -> ParseResult | None:
-        """Return a clear PDF rejection payload, or None if not a hard PDF."""
+    async def _reject_if_binary(page_url: str, timeout: float) -> ParseResult | None:
         try:
             probe = await http_client.probe_content_type(
                 page_url, timeout_seconds=min(timeout, 30.0)
             )
         except UpstreamError:
-            # Without a probe, only a ``.pdf`` extension is a hard signal.
-            if url_has_pdf_extension(page_url):
+            if url_has_binary_extension(page_url):
+                kind = url_extension(page_url) or "bin"
                 return ParseResult(
                     success=False,
                     url=page_url,
-                    is_pdf=True,
-                    content_type="application/pdf",
-                    error_message=PDF_PARSE_HINT,
-                    hint="Use fetch_pdf to download this PDF.",
+                    is_binary=True,
+                    binary_kind=kind,
+                    content_type="application/octet-stream",
+                    error_message=BINARY_PARSE_HINT,
+                    hint="Call fetch_binary on this URL.",
                     used_proxy=bool(config.default_proxy),
                 )
             return None
 
-        if not probe.get("is_pdf"):
+        if not probe.get("is_binary"):
             return None
         return ParseResult(
             success=False,
             url=str(probe.get("url") or page_url),
             status_code=probe.get("status_code"),
-            content_type=probe.get("content_type") or "application/pdf",
-            is_pdf=True,
-            error_message=PDF_PARSE_HINT,
-            hint="Use fetch_pdf to download this PDF.",
+            content_type=probe.get("content_type"),
+            is_binary=True,
+            binary_kind=str(probe.get("binary_kind") or ""),
+            error_message=BINARY_PARSE_HINT,
+            hint="Call fetch_binary on this URL.",
             used_proxy=bool(probe.get("used_proxy")),
         )
 
@@ -77,24 +92,19 @@ def create_server(config: ServerConfig) -> FastMCP:
         }
     )
     async def parse_page(
-        url: _UrlArg,
+        url: _PageUrlArg,
         timeout: _TimeoutArg = config.request_timeout_seconds,
     ) -> str:
-        """Fetch an HTML page via Crawl4AI and return cleaned markdown JSON.
+        """Read an HTML web page and return cleaned markdown as JSON.
 
-        Does **not** parse PDF bodies. If the URL is a confirmed PDF
-        (Content-Type / ``%PDF`` / ``.pdf``), returns ``is_pdf=true`` and
-        tells you to call ``fetch_pdf`` (or an HTML mirror of the document
-        when one exists).
+        WHEN TO USE: HTML articles, docs, wiki, blog posts, /abs pages.
+        WHEN NOT TO USE: PDF, DOCX, XLSX, ZIP, images, or other file downloads
+        — call fetch_binary instead. If this tool returns is_binary=true, switch
+        to fetch_binary (do not retry parse_page in a loop).
 
-        On failure: return the error — do not retry the same URL in a loop
-        and do not call ``fetch_pdf`` as a fallback for HTML pages.
-
-        Egress proxy (if any) comes from server config ``default_proxy``.
-
-        Returns JSON: success, url, status_code, markdown, error_message,
+        Returns JSON fields: success, url, status_code, markdown, error_message,
         links_internal, links_external, truncated, used_proxy, content_type,
-        is_pdf, hint.
+        is_binary, binary_kind, hint.
         """
         async with tracked_work("parse_page"):
             page_url = (url or "").strip()
@@ -105,9 +115,9 @@ def create_server(config: ServerConfig) -> FastMCP:
                     error_message="url must be an absolute http(s) URL",
                 ).to_json()
 
-            pdf_reject = await _reject_if_pdf(page_url, timeout)
-            if pdf_reject is not None:
-                return pdf_reject.to_json()
+            binary_reject = await _reject_if_binary(page_url, timeout)
+            if binary_reject is not None:
+                return binary_reject.to_json()
 
             try:
                 result = await crawl_client.parse_page(
@@ -116,8 +126,8 @@ def create_server(config: ServerConfig) -> FastMCP:
                 )
             except UpstreamError as exc:
                 msg = str(exc)
-                if url_suggests_pdf(page_url) or "minimal_text" in msg.lower():
-                    maybe = await _reject_if_pdf(page_url, min(timeout, 30.0))
+                if url_suggests_binary(page_url) or "minimal_text" in msg.lower():
+                    maybe = await _reject_if_binary(page_url, min(timeout, 30.0))
                     if maybe is not None:
                         return maybe.to_json()
                 return ParseResult(
@@ -137,33 +147,39 @@ def create_server(config: ServerConfig) -> FastMCP:
             "openWorldHint": True,
         }
     )
-    async def fetch_pdf(
-        url: _UrlArg,
+    async def fetch_binary(
+        url: _FileUrlArg,
         timeout: _TimeoutArg = config.request_timeout_seconds,
     ) -> str:
-        """Download a PDF via HTTP (server ``default_proxy`` if configured).
+        """Download a binary file and return metadata + base64 bytes as JSON.
 
-        Use only for real PDF URLs. Not a fallback when ``parse_page`` fails on
-        HTML. Does not extract text — returns metadata plus ``content_base64``
-        (placed last in the JSON object).
+        WHEN TO USE: the URL itself is a file download — pdf, docx/xlsx/pptx,
+        odt/epub, zip/tar/gz/7z/rar, png/jpeg/gif/webp, or similar. Also use when
+        parse_page returned is_binary=true / hint to call fetch_binary.
+        WHEN NOT TO USE: normal HTML pages (example.com, wiki, /abs, blogs) —
+        use parse_page. Never switch to this tool only because parse_page failed
+        on an HTML URL (anti-bot, timeout, empty markdown).
 
-        Returns JSON: success, url, status_code, media_type, size, filename,
+        Download only: no text extraction, no OCR, no unzip. Prefer fields
+        kind, size, filename; content_base64 is last and may be large.
+
+        Returns JSON: success, url, status_code, media_type, kind, size, filename,
         truncated, error_message, used_proxy, content_base64.
         """
-        async with tracked_work("fetch_pdf"):
+        async with tracked_work("fetch_binary"):
             page_url = (url or "").strip()
             if not page_url.startswith(("http://", "https://")):
-                return FetchPdfResult(
+                return FetchBinaryResult(
                     success=False,
                     url=page_url,
                     error_message="url must be an absolute http(s) URL",
                 ).to_json()
             try:
-                result = await http_client.fetch_pdf(
+                result = await http_client.fetch_binary(
                     page_url, timeout_seconds=timeout
                 )
             except UpstreamError as exc:
-                return FetchPdfResult(
+                return FetchBinaryResult(
                     success=False,
                     url=page_url,
                     status_code=exc.status_code,
@@ -181,7 +197,11 @@ def create_server(config: ServerConfig) -> FastMCP:
         }
     )
     async def check_upstream() -> str:
-        """Check Crawl4AI upstream ``GET /health`` (no secrets in the response)."""
+        """Check whether the page-parser upstream is healthy. No URL needed.
+
+        WHEN TO USE: user asks if the crawler/parser backend is up, or its version.
+        Returns JSON: ok, status_code, upstream_status, upstream_version.
+        """
         async with tracked_work("check_upstream"):
             try:
                 payload = await crawl_client.check_health()

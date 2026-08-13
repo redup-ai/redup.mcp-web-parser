@@ -151,12 +151,12 @@ async def test_parse_page_tool_schema_has_no_proxy_arg(
     server = create_server(config)
     tools = await server.get_tools()
     assert "parse_page" in tools
-    assert "fetch_pdf" in tools
+    assert "fetch_binary" in tools
     schema = tools["parse_page"].parameters
     props = (schema or {}).get("properties") or {}
     assert "proxy" not in props
     assert "url" in props
-    assert "proxy" not in ((tools["fetch_pdf"].parameters or {}).get("properties") or {})
+    assert "proxy" not in ((tools["fetch_binary"].parameters or {}).get("properties") or {})
 
     out = await tools["parse_page"].run({"url": "https://example.com/"})
     text = _tool_text(out)
@@ -169,7 +169,7 @@ async def test_parse_page_tool_schema_has_no_proxy_arg(
 
 
 @pytest.mark.asyncio
-async def test_parse_page_rejects_pdf_clearly(
+async def test_parse_page_rejects_binary_clearly(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
     def handler(request: httpx.Request) -> httpx.Response:
@@ -197,13 +197,14 @@ async def test_parse_page_rejects_pdf_clearly(
     )
     payload = json.loads(_tool_text(out))
     assert payload["success"] is False
-    assert payload["is_pdf"] is True
-    assert "fetch_pdf" in payload["error_message"]
+    assert payload["is_binary"] is True
+    assert payload["binary_kind"] == "pdf"
+    assert "fetch_binary" in payload["error_message"]
     assert payload["hint"]
 
 
 @pytest.mark.asyncio
-async def test_fetch_pdf_returns_base64(
+async def test_fetch_binary_returns_base64(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
     pdf_bytes = b"%PDF-1.4\n%fake\n"
@@ -230,15 +231,15 @@ async def test_fetch_pdf_returns_base64(
 
     server = create_server(config)
     tools = await server.get_tools()
-    out = await tools["fetch_pdf"].run(
+    out = await tools["fetch_binary"].run(
         {"url": "https://example.com/docs/paper.pdf"}
     )
     payload = json.loads(_tool_text(out))
     assert payload["success"] is True
+    assert payload["kind"] == "pdf"
     assert payload["filename"] == "paper.pdf"
     assert payload["size"] == len(pdf_bytes)
     assert payload["content_base64"]
-    # Metadata fields should appear before content_base64 in the JSON object.
     keys = list(payload.keys())
     assert keys[-1] == "content_base64"
     assert keys.index("used_proxy") < keys.index("content_base64")
@@ -246,10 +247,42 @@ async def test_fetch_pdf_returns_base64(
 
 
 @pytest.mark.asyncio
+async def test_fetch_binary_zip(
+    monkeypatch: pytest.MonkeyPatch, config: ServerConfig
+):
+    zip_bytes = b"PK\x03\x04" + b"\x00" * 20
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/zip"},
+            content=zip_bytes,
+        )
+
+    transport = _Transport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    server = create_server(config)
+    tools = await server.get_tools()
+    out = await tools["fetch_binary"].run(
+        {"url": "https://example.com/files/data.zip"}
+    )
+    payload = json.loads(_tool_text(out))
+    assert payload["success"] is True
+    assert payload["kind"] == "zip"
+
+
+@pytest.mark.asyncio
 async def test_parse_page_does_not_hard_reject_pdf_path_with_html(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
-    """``/pdf/`` path + ``text/html`` must not set ``is_pdf``."""
+    """``/pdf/`` path + ``text/html`` must not set ``is_binary``."""
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -294,13 +327,13 @@ async def test_parse_page_does_not_hard_reject_pdf_path_with_html(
         {"url": "https://example.com/docs/pdf/img/table-word.pdf"}
     )
     payload = json.loads(_tool_text(out))
-    assert payload.get("is_pdf") is not True
+    assert payload.get("is_binary") is not True
     assert captured.get("crawled") is True
     assert payload.get("success") is True
 
 
 @pytest.mark.asyncio
-async def test_parse_page_crawl_fail_does_not_infer_pdf_from_extension(
+async def test_parse_page_crawl_fail_does_not_infer_binary_from_extension(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
     def handler(request: httpx.Request) -> httpx.Response:
@@ -330,21 +363,21 @@ async def test_parse_page_crawl_fail_does_not_infer_pdf_from_extension(
     )
     payload = json.loads(_tool_text(out))
     assert payload["success"] is False
-    assert payload.get("is_pdf") is not True
+    assert payload.get("is_binary") is not True
     assert "boom" in payload.get("error_message", "") or "500" in payload.get(
         "error_message", ""
     )
 
 
 @pytest.mark.asyncio
-async def test_fetch_pdf_rejects_html_content_type(
+async def test_fetch_binary_rejects_html_content_type(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             300,
             headers={"content-type": "text/html"},
-            content=b"<html>not a pdf</html>",
+            content=b"<html>not a binary</html>",
         )
 
     transport = _Transport(handler)
@@ -358,7 +391,7 @@ async def test_fetch_pdf_rejects_html_content_type(
 
     server = create_server(config)
     tools = await server.get_tools()
-    out = await tools["fetch_pdf"].run(
+    out = await tools["fetch_binary"].run(
         {"url": "https://example.com/docs/pdf/thing"}
     )
     payload = json.loads(_tool_text(out))

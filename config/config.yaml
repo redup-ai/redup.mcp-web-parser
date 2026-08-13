@@ -13,7 +13,7 @@ McpWebParser:
   request_timeout_seconds: 120
   max_timeout_seconds: 300
   max_markdown_chars: 100000
-  max_pdf_bytes: 15728640
+  max_binary_bytes: 15728640
   delay_before_return_html: 2.5
   json_response: true
   stateless_http: true

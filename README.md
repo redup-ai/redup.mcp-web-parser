@@ -22,22 +22,19 @@ MCP Streamable HTTP service that parses web pages into cleaned markdown via
 - Targeted at Crawl4AI **0.8.x** (per-request `proxy_config` works). On 0.9+
   Docker API may reject `proxy` / `proxy_config` in the request body.
 
-Contract: MCP tools `parse_page`, `fetch_pdf`, `check_upstream`.
+Contract: MCP tools `parse_page`, `fetch_binary`, `check_upstream`.
 Endpoint: `POST http://<host>:8000/mcp` (stateless Streamable HTTP, JSON).
 Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
 
 **Tool args:**
-- `parse_page` — **`url`**, optional **`timeout`**. HTML only via Crawl4AI.
-  Confirmed PDFs (`Content-Type` / `%PDF` / `.pdf`) return `is_pdf=true` and a
-  hint to call `fetch_pdf`. A bare `/pdf/` path is not enough when the response
-  type is clearly non-PDF.
-- `fetch_pdf` — **`url`**, optional **`timeout`**. Downloads a PDF over HTTP
-  (same `default_proxy`). Rejects non-PDF Content-Types. JSON puts small fields
-  before `content_base64`. Not a fallback for failed HTML parses.
-- `check_upstream` — no args (`GET /health`).
+- `parse_page` — HTML pages → markdown JSON. Not for PDF/DOCX/ZIP/images
+  (`is_binary=true` → switch to `fetch_binary`).
+- `fetch_binary` — download binary files (pdf/docx/zip/images/…). Download only
+  (no OCR/unzip). Not a fallback when HTML `parse_page` fails.
+- `check_upstream` — upstream health/version.
 
 **Agent registration example:** `{"id":"web-parser","url":"http://…:8000/mcp"}`
-→ LLM names `mcp__web-parser__parse_page` / `mcp__web-parser__fetch_pdf`.
+→ LLM names `mcp__web-parser__parse_page` / `mcp__web-parser__fetch_binary`.
 
 ## Configuration
 
@@ -59,7 +56,7 @@ McpWebParser:
   request_timeout_seconds: 120
   max_timeout_seconds: 300
   max_markdown_chars: 100000
-  max_pdf_bytes: 15728640
+  max_binary_bytes: 15728640
   delay_before_return_html: 2.5
   json_response: true
   stateless_http: true

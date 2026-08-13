@@ -21,7 +21,8 @@ class ParseResult:
     truncated: bool = False
     used_proxy: bool = False
     content_type: str | None = None
-    is_pdf: bool = False
+    is_binary: bool = False
+    binary_kind: str = ""
     hint: str = ""
 
     def to_json(self) -> str:
@@ -29,17 +30,18 @@ class ParseResult:
 
 
 @dataclass
-class FetchPdfResult:
-    """PDF download payload for MCP tool results.
+class FetchBinaryResult:
+    """Binary download payload for MCP tool results.
 
     Large binary fields are last so truncated JSON previews still show
-    metadata (``size``, ``filename``, …).
+    metadata (``size``, ``filename``, ``kind``, …).
     """
 
     success: bool
     url: str
     status_code: int | None = None
     media_type: str | None = None
+    kind: str = ""
     size: int = 0
     filename: str = ""
     truncated: bool = False
@@ -51,10 +53,9 @@ class FetchPdfResult:
         return json.dumps(asdict(self), ensure_ascii=False)
 
 
-PDF_PARSE_HINT = (
-    "This URL is a PDF. parse_page only extracts HTML pages via Crawl4AI. "
-    "Call fetch_pdf to download the file (base64), or open an HTML version "
-    "of the document if available."
+BINARY_PARSE_HINT = (
+    "This URL is a binary file, not an HTML page. "
+    "Call fetch_binary to download it. parse_page cannot read PDF/DOCX/ZIP/images."
 )
 
 

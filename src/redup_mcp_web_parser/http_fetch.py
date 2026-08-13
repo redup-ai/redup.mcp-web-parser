@@ -1,4 +1,4 @@
-"""HTTP helpers: content-type probe and PDF download (uses config default_proxy)."""
+"""HTTP helpers: content-type probe and binary download (config default_proxy)."""
 
 from __future__ import annotations
 
@@ -10,85 +10,24 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 
+from redup_mcp_web_parser.binary_types import (
+    decide_binary,
+    is_clearly_textual_content_type,
+    url_suggests_binary,
+)
 from redup_mcp_web_parser.config import ServerConfig
 from redup_mcp_web_parser.errors import UpstreamError
-from redup_mcp_web_parser.output import FetchPdfResult
+from redup_mcp_web_parser.output import FetchBinaryResult
 
 logger = logging.getLogger(__name__)
 
-_PDF_EXT_RE = re.compile(r"\.pdf(\?|#|$)", re.IGNORECASE)
-_PDF_PATH_RE = re.compile(r"/pdf(/|$)", re.IGNORECASE)
 
-
-def url_has_pdf_extension(url: str) -> bool:
-    """True when the URL path ends with ``.pdf``."""
-    return bool(_PDF_EXT_RE.search((url or "").strip()))
-
-
-def url_suggests_pdf(url: str) -> bool:
-    """Soft URL heuristic: ``.pdf`` extension or a ``/pdf/`` path segment.
-
-    Soft only — not sufficient alone when Content-Type is a non-PDF type.
-    """
-    raw = (url or "").strip()
-    if not raw:
-        return False
-    if url_has_pdf_extension(raw):
-        return True
-    return bool(_PDF_PATH_RE.search(urlparse(raw).path))
-
-
-# Back-compat alias.
-url_looks_like_pdf = url_suggests_pdf
-
-
-def is_pdf_content_type(content_type: str | None) -> bool:
-    ctype = (content_type or "").split(";")[0].strip().lower()
-    return ctype == "application/pdf" or ctype.endswith("/pdf")
-
-
-def is_clearly_non_pdf_content_type(content_type: str | None) -> bool:
-    """True when Content-Type clearly is not a PDF body."""
-    ctype = (content_type or "").split(";")[0].strip().lower()
-    if not ctype or is_pdf_content_type(ctype):
-        return False
-    if ctype.startswith(("text/", "image/", "audio/", "video/", "font/")):
-        return True
-    if ctype in {
-        "application/json",
-        "application/javascript",
-        "application/xml",
-        "application/xhtml+xml",
-        "application/atom+xml",
-        "application/rss+xml",
-    }:
-        return True
-    # application/octet-stream is ambiguous — not clearly non-PDF.
-    return "html" in ctype or "xml" in ctype or "json" in ctype
-
-
-def decide_is_pdf(
-    *,
+def filename_from_response(
     url: str,
-    content_type: str | None,
-    body_prefix: bytes = b"",
-) -> bool:
-    """Hard PDF decision for parse_page reject / probe.
-
-    Priority: ``%PDF`` magic → Content-Type → ``.pdf`` extension when type is
-    missing/ambiguous. A bare ``/pdf/`` path is never enough if type is non-PDF.
-    """
-    if body_prefix.lstrip().startswith(b"%PDF"):
-        return True
-    if is_pdf_content_type(content_type):
-        return True
-    if is_clearly_non_pdf_content_type(content_type):
-        return False
-    # No decisive type: trust .pdf extension only (not /pdf/ alone).
-    return url_has_pdf_extension(url)
-
-
-def filename_from_response(url: str, headers: httpx.Headers) -> str:
+    headers: httpx.Headers,
+    *,
+    kind: str = "",
+) -> str:
     cd = headers.get("content-disposition") or ""
     match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, flags=re.I)
     if match:
@@ -97,7 +36,12 @@ def filename_from_response(url: str, headers: httpx.Headers) -> str:
     name = unquote(path.rsplit("/", 1)[-1]) if path else ""
     if name and "." in name:
         return name
-    return "document.pdf"
+    ext = {
+        "gzip": "gz",
+        "bzip2": "bz2",
+        "jpeg": "jpg",
+    }.get(kind, kind or "bin")
+    return f"download.{ext}"
 
 
 def _httpx_proxy(proxy: str) -> str | None:
@@ -122,10 +66,10 @@ class DirectHttpClient:
         *,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        """HEAD / ranged GET to learn Content-Type and optional ``%PDF`` magic."""
+        """HEAD / ranged GET for Content-Type and magic-byte peek."""
         timeout_s = self._config.clamp_timeout(timeout_seconds)
         proxy = _httpx_proxy(self._config.default_proxy)
-        headers = {"User-Agent": "redup-mcp-web-parser/0.2"}
+        headers = {"User-Agent": "redup-mcp-web-parser/0.3"}
         body_prefix = b""
         try:
             async with httpx.AsyncClient(
@@ -135,19 +79,16 @@ class DirectHttpClient:
             ) as client:
                 resp = await client.head(url, headers=headers)
                 ctype = resp.headers.get("content-type")
-                # Need body peek when HEAD lacks type, or URL soft-suggests PDF.
+                final_guess = str(resp.url) or url
                 need_peek = (
                     resp.status_code >= 400
                     or not ctype
-                    or (
-                        url_suggests_pdf(str(resp.url) or url)
-                        and not is_pdf_content_type(ctype)
-                    )
+                    or url_suggests_binary(final_guess)
                 )
                 if need_peek:
                     resp = await client.get(
                         url,
-                        headers={**headers, "Range": "bytes=0-15"},
+                        headers={**headers, "Range": "bytes=0-511"},
                     )
                     body_prefix = resp.content or b""
         except httpx.HTTPError as exc:
@@ -155,29 +96,30 @@ class DirectHttpClient:
 
         final_url = str(resp.url)
         ctype = resp.headers.get("content-type")
-        is_pdf = decide_is_pdf(
+        is_bin, kind = decide_binary(
             url=final_url, content_type=ctype, body_prefix=body_prefix
         )
         return {
             "url": final_url,
             "status_code": resp.status_code,
             "content_type": ctype,
-            "is_pdf": is_pdf,
-            "url_suggests_pdf": url_suggests_pdf(final_url),
+            "is_binary": is_bin,
+            "binary_kind": kind,
+            "url_suggests_binary": url_suggests_binary(final_url),
             "used_proxy": bool(proxy),
         }
 
-    async def fetch_pdf(
+    async def fetch_binary(
         self,
         url: str,
         *,
         timeout_seconds: float | None = None,
-    ) -> FetchPdfResult:
-        """Download a PDF (or fail clearly if response is not a PDF)."""
+    ) -> FetchBinaryResult:
+        """Download a binary file (or fail clearly if body looks like HTML/text)."""
         timeout_s = self._config.clamp_timeout(timeout_seconds)
         proxy = _httpx_proxy(self._config.default_proxy)
-        max_bytes = int(self._config.max_pdf_bytes)
-        headers = {"User-Agent": "redup-mcp-web-parser/0.2"}
+        max_bytes = int(self._config.max_binary_bytes)
+        headers = {"User-Agent": "redup-mcp-web-parser/0.3"}
         used_proxy = bool(proxy)
 
         try:
@@ -192,10 +134,11 @@ class DirectHttpClient:
                 status = resp.status_code
                 final_url = str(resp.url)
                 ctype = resp.headers.get("content-type")
-                filename = filename_from_response(final_url, resp.headers)
+                resp_headers = resp.headers
+                filename = filename_from_response(final_url, resp_headers)
 
                 if status >= 400:
-                    return FetchPdfResult(
+                    return FetchBinaryResult(
                         success=False,
                         url=final_url,
                         status_code=status,
@@ -205,16 +148,15 @@ class DirectHttpClient:
                         used_proxy=used_proxy,
                     )
 
-                # Prefer Content-Type over URL path heuristics.
-                if ctype and is_clearly_non_pdf_content_type(ctype):
-                    return FetchPdfResult(
+                if ctype and is_clearly_textual_content_type(ctype):
+                    return FetchBinaryResult(
                         success=False,
                         url=final_url,
                         status_code=status,
                         media_type=ctype,
                         filename=filename,
                         error_message=(
-                            f"URL did not return a PDF (Content-Type: {ctype}). "
+                            f"URL did not return a binary file (Content-Type: {ctype}). "
                             "Use parse_page for HTML pages."
                         ),
                         used_proxy=used_proxy,
@@ -235,12 +177,15 @@ class DirectHttpClient:
                         break
                     chunks.append(chunk)
         except httpx.HTTPError as exc:
-            logger.warning("pdf download failed url=%s err=%s", url, exc)
-            raise UpstreamError(f"pdf download failed: {exc}") from exc
+            logger.warning("binary download failed url=%s err=%s", url, exc)
+            raise UpstreamError(f"binary download failed: {exc}") from exc
 
         data = b"".join(chunks)
-        if not data.lstrip().startswith(b"%PDF"):
-            return FetchPdfResult(
+        is_bin, kind = decide_binary(
+            url=final_url, content_type=ctype, body_prefix=data[:512]
+        )
+        if not is_bin:
+            return FetchBinaryResult(
                 success=False,
                 url=final_url,
                 status_code=status,
@@ -248,24 +193,26 @@ class DirectHttpClient:
                 size=len(data),
                 filename=filename,
                 error_message=(
-                    "Downloaded body is not a PDF (missing %PDF header). "
+                    "Downloaded body does not look like a supported binary. "
                     "Use parse_page for HTML pages."
                 ),
                 used_proxy=used_proxy,
             )
 
+        filename = filename_from_response(final_url, resp_headers, kind=kind)
         b64 = base64.b64encode(data).decode("ascii")
         err = ""
         if truncated:
             err = (
-                f"PDF truncated to max_pdf_bytes={max_bytes}. "
-                "Increase McpWebParser.max_pdf_bytes or fetch a smaller file."
+                f"File truncated to max_binary_bytes={max_bytes}. "
+                "Increase McpWebParser.max_binary_bytes or fetch a smaller file."
             )
-        return FetchPdfResult(
+        return FetchBinaryResult(
             success=True,
             url=final_url,
             status_code=status,
-            media_type=ctype or "application/pdf",
+            media_type=ctype or "application/octet-stream",
+            kind=kind,
             size=len(data),
             filename=filename,
             truncated=truncated,

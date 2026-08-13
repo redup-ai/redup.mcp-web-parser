@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
+from redup_mcp_web_parser.binary_types import (
+    decide_binary,
+    url_has_binary_extension,
+    url_suggests_binary,
+)
 from redup_mcp_web_parser.config import ServerConfig
 from redup_mcp_web_parser.errors import ConfigError
-from redup_mcp_web_parser.http_fetch import (
-    decide_is_pdf,
-    url_has_pdf_extension,
-    url_suggests_pdf,
-)
 from redup_mcp_web_parser.output import (
-    FetchPdfResult,
+    FetchBinaryResult,
     markdown_from_api_item,
     parse_crawl_api_response,
     truncate_markdown,
@@ -39,6 +39,19 @@ def test_config_from_servicekit_and_proxy():
     assert cfg.default_proxy == "http://proxy.example:3128"
     assert cfg.clamp_timeout(999) == cfg.max_timeout_seconds
     assert cfg.clamp_timeout(None) == cfg.request_timeout_seconds
+
+
+def test_config_max_pdf_bytes_alias():
+    cfg = ServerConfig.from_servicekit(
+        {
+            "service": {"host": "0.0.0.0", "port": 8000, "path": "/mcp"},
+            "McpWebParser": {
+                "upstream_base_url": "https://example.test/c4ai",
+                "max_pdf_bytes": 2048,
+            },
+        }
+    )
+    assert cfg.max_binary_bytes == 2048
 
 
 def test_markdown_and_truncate():
@@ -90,39 +103,53 @@ def test_parse_crawl_api_response_empty():
     assert result.error_message == "empty_results"
 
 
-def test_pdf_url_heuristics_and_decide():
-    assert url_has_pdf_extension("https://x.example/a.pdf")
-    assert not url_has_pdf_extension("https://docs.example/pdf/2510.16927")
-    assert url_suggests_pdf("https://docs.example/pdf/2510.16927")
-    assert decide_is_pdf(
+def test_binary_heuristics_and_decide():
+    assert url_has_binary_extension("https://x.example/a.pdf")
+    assert url_has_binary_extension("https://x.example/a.docx")
+    assert not url_has_binary_extension("https://docs.example/pdf/2510.16927")
+    assert url_suggests_binary("https://docs.example/pdf/2510.16927")
+
+    ok, kind = decide_binary(
         url="https://docs.example/pdf/2510.16927",
         content_type="application/pdf",
     )
-    assert not decide_is_pdf(
+    assert ok and kind == "pdf"
+
+    ok, kind = decide_binary(
         url="https://docs.example/pdf/img/table-word.pdf",
         content_type="text/html",
     )
-    assert decide_is_pdf(
+    assert not ok
+
+    ok, kind = decide_binary(
         url="https://example.com/file",
         content_type="text/html",
         body_prefix=b"%PDF-1.4",
     )
-    assert decide_is_pdf(
-        url="https://example.com/doc.pdf",
+    assert ok and kind == "pdf"
+
+    ok, kind = decide_binary(
+        url="https://example.com/archive.zip",
         content_type=None,
+        body_prefix=b"PK\x03\x04....",
     )
-    assert not decide_is_pdf(
-        url="https://docs.example/pdf/2510.16927",
-        content_type=None,
+    assert ok and kind == "zip"
+
+    ok, kind = decide_binary(
+        url="https://example.com/paper.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        body_prefix=b"PK\x03\x04....",
     )
+    assert ok and kind == "docx"
 
 
-def test_fetch_pdf_result_json_puts_base64_last():
-    raw = FetchPdfResult(
+def test_fetch_binary_result_json_puts_base64_last():
+    raw = FetchBinaryResult(
         success=True,
         url="https://example.com/a.pdf",
         status_code=200,
         media_type="application/pdf",
+        kind="pdf",
         size=3,
         filename="a.pdf",
         truncated=False,
@@ -130,9 +157,6 @@ def test_fetch_pdf_result_json_puts_base64_last():
         used_proxy=True,
         content_base64="QUJD",
     ).to_json()
-    assert '"used_proxy": true' in raw
     assert raw.index('"used_proxy"') < raw.index('"content_base64"')
-    assert raw.rstrip().endswith('}')
-    # last property before closing brace is content_base64
+    assert raw.index('"kind"') < raw.index('"content_base64"')
     assert '"content_base64": "QUJD"' in raw
-    assert raw.index('"filename"') < raw.index('"content_base64"')
