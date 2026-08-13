@@ -297,6 +297,43 @@ async def test_parse_page_does_not_hard_reject_pdf_path_with_html(
 
 
 @pytest.mark.asyncio
+async def test_parse_page_crawl_fail_does_not_infer_pdf_from_extension(
+    monkeypatch: pytest.MonkeyPatch, config: ServerConfig
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method in {"HEAD", "GET"} and "example.com" in str(request.url):
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                content=b"<html>x</html>",
+            )
+        if request.url.path.endswith("/crawl"):
+            return httpx.Response(500, text="upstream crawl HTTP 500: boom")
+        return httpx.Response(404)
+
+    transport = _Transport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    server = create_server(config)
+    tools = await server.get_tools()
+    out = await tools["parse_page"].run(
+        {"url": "https://example.com/docs/table-word.pdf"}
+    )
+    payload = json.loads(_tool_text(out))
+    assert payload["success"] is False
+    assert payload.get("is_pdf") is not True
+    assert "boom" in payload.get("error_message", "") or "500" in payload.get(
+        "error_message", ""
+    )
+
+
+@pytest.mark.asyncio
 async def test_fetch_pdf_rejects_html_content_type(
     monkeypatch: pytest.MonkeyPatch, config: ServerConfig
 ):

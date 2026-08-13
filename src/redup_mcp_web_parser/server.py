@@ -120,17 +120,6 @@ def create_server(config: ServerConfig) -> FastMCP:
                     maybe = await _reject_if_pdf(page_url, min(timeout, 30.0))
                     if maybe is not None:
                         return maybe.to_json()
-                    if url_has_pdf_extension(page_url):
-                        return ParseResult(
-                            success=False,
-                            url=page_url,
-                            status_code=exc.status_code,
-                            is_pdf=True,
-                            content_type="application/pdf",
-                            error_message=PDF_PARSE_HINT,
-                            hint="Use fetch_pdf to download this PDF.",
-                            used_proxy=bool(config.default_proxy),
-                        ).to_json()
                 return ParseResult(
                     success=False,
                     url=page_url,
