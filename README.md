@@ -30,7 +30,9 @@ Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
 - `parse_page` — HTML pages → markdown JSON. Not for PDF/DOCX/ZIP/images
   (`is_binary=true` → switch to `fetch_binary`).
 - `fetch_binary` — download binary files (pdf/docx/zip/images/…). Download only
-  (no OCR/unzip). Not a fallback when HTML `parse_page` fails.
+  (no OCR/unzip). Bytes only in JSON `content_base64` (no shared disk path).
+  Downstream tools must accept those bytes via their own input contract.
+  Not a fallback when HTML `parse_page` fails.
 
 **Agent registration example:** `{"id":"web-parser","url":"http://…:8000/mcp"}`
 → LLM names `mcp__web-parser__parse_page` / `mcp__web-parser__fetch_binary`.

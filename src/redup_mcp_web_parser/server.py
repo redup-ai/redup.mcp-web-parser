@@ -159,8 +159,10 @@ def create_server(config: ServerConfig) -> FastMCP:
         use parse_page. Never switch to this tool only because parse_page failed
         on an HTML URL (anti-bot, timeout, empty markdown).
 
-        Download only: no text extraction, no OCR, no unzip. Prefer fields
-        kind, size, filename; content_base64 is last and may be large.
+        Download only: no text extraction, no OCR, no unzip. Bytes live only in
+        JSON ``content_base64`` (last; may be large) — this server does not write
+        a shared filesystem path. Downstream tools that need the bytes must use
+        their own input contract. Prefer metadata fields kind, size, filename.
 
         Returns JSON: success, url, status_code, media_type, kind, size, filename,
         truncated, error_message, used_proxy, content_base64.
