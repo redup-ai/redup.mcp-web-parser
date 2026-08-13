@@ -114,60 +114,62 @@ class DirectHttpClient:
         used_proxy = bool(proxy)
 
         try:
-            async with httpx.AsyncClient(
-                timeout=_client_timeout(timeout_s),
-                follow_redirects=True,
-                proxy=proxy,
-            ) as client:
-                async with client.stream("GET", url, headers=headers) as resp:
-                    status = resp.status_code
-                    final_url = str(resp.url)
-                    ctype = resp.headers.get("content-type")
-                    filename = filename_from_response(final_url, resp.headers)
+            async with (
+                httpx.AsyncClient(
+                    timeout=_client_timeout(timeout_s),
+                    follow_redirects=True,
+                    proxy=proxy,
+                ) as client,
+                client.stream("GET", url, headers=headers) as resp,
+            ):
+                status = resp.status_code
+                final_url = str(resp.url)
+                ctype = resp.headers.get("content-type")
+                filename = filename_from_response(final_url, resp.headers)
 
-                    if status >= 400:
-                        return FetchPdfResult(
-                            success=False,
-                            url=final_url,
-                            status_code=status,
-                            media_type=ctype,
-                            filename=filename,
-                            error_message=f"HTTP {status} while downloading",
-                            used_proxy=used_proxy,
-                        )
+                if status >= 400:
+                    return FetchPdfResult(
+                        success=False,
+                        url=final_url,
+                        status_code=status,
+                        media_type=ctype,
+                        filename=filename,
+                        error_message=f"HTTP {status} while downloading",
+                        used_proxy=used_proxy,
+                    )
 
-                    # Early reject obvious non-PDF when type is present.
-                    if ctype and not is_pdf_content_type(ctype) and not url_looks_like_pdf(
-                        final_url
-                    ):
-                        return FetchPdfResult(
-                            success=False,
-                            url=final_url,
-                            status_code=status,
-                            media_type=ctype,
-                            filename=filename,
-                            error_message=(
-                                f"URL did not return a PDF (Content-Type: {ctype}). "
-                                "Use parse_page for HTML pages."
-                            ),
-                            used_proxy=used_proxy,
-                        )
+                # Early reject obvious non-PDF when type is present.
+                if ctype and not is_pdf_content_type(ctype) and not url_looks_like_pdf(
+                    final_url
+                ):
+                    return FetchPdfResult(
+                        success=False,
+                        url=final_url,
+                        status_code=status,
+                        media_type=ctype,
+                        filename=filename,
+                        error_message=(
+                            f"URL did not return a PDF (Content-Type: {ctype}). "
+                            "Use parse_page for HTML pages."
+                        ),
+                        used_proxy=used_proxy,
+                    )
 
-                    chunks: list[bytes] = []
-                    total = 0
-                    truncated = False
-                    async for chunk in resp.aiter_bytes():
-                        if not chunk:
-                            continue
-                        total += len(chunk)
-                        if total > max_bytes:
-                            truncated = True
-                            # keep only up to max_bytes
-                            remain = max_bytes - (total - len(chunk))
-                            if remain > 0:
-                                chunks.append(chunk[:remain])
-                            break
-                        chunks.append(chunk)
+                chunks: list[bytes] = []
+                total = 0
+                truncated = False
+                async for chunk in resp.aiter_bytes():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        truncated = True
+                        # keep only up to max_bytes
+                        remain = max_bytes - (total - len(chunk))
+                        if remain > 0:
+                            chunks.append(chunk[:remain])
+                        break
+                    chunks.append(chunk)
         except httpx.HTTPError as exc:
             logger.warning("pdf download failed url=%s err=%s", url, exc)
             raise UpstreamError(f"pdf download failed: {exc}") from exc
