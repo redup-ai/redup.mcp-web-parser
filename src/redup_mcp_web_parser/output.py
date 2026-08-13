@@ -20,9 +20,38 @@ class ParseResult:
     links_external: list[Any] = field(default_factory=list)
     truncated: bool = False
     used_proxy: bool = False
+    content_type: str | None = None
+    is_pdf: bool = False
+    hint: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
+
+
+@dataclass
+class FetchPdfResult:
+    """Agent-facing PDF download payload."""
+
+    success: bool
+    url: str
+    status_code: int | None = None
+    media_type: str | None = None
+    size: int = 0
+    filename: str = ""
+    content_base64: str = ""
+    truncated: bool = False
+    error_message: str = ""
+    used_proxy: bool = False
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+
+PDF_PARSE_HINT = (
+    "This URL is a PDF. parse_page only extracts HTML pages via Crawl4AI. "
+    "Call fetch_pdf to download the file (base64), or open an HTML version "
+    "of the document if available (e.g. arXiv /abs or /html)."
+)
 
 
 def markdown_from_api_item(item: dict[str, Any]) -> str:

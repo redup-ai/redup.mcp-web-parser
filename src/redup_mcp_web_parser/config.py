@@ -27,6 +27,7 @@ class ServerConfig:
     request_timeout_seconds: float = 120.0
     max_timeout_seconds: float = 300.0
     max_markdown_chars: int = 100_000
+    max_pdf_bytes: int = 15 * 1024 * 1024
     delay_before_return_html: float = 2.5
     transport: str = "streamable-http"
     host: str = "0.0.0.0"
@@ -57,6 +58,8 @@ class ServerConfig:
             raise ConfigError("request_timeout_seconds must be <= max_timeout_seconds")
         if self.max_markdown_chars < 1024:
             raise ConfigError("max_markdown_chars must be >= 1024")
+        if self.max_pdf_bytes < 1024:
+            raise ConfigError("max_pdf_bytes must be >= 1024")
         if self.delay_before_return_html < 0:
             raise ConfigError("delay_before_return_html must be >= 0")
         if self.port < 1 or self.port > 65535:
@@ -82,6 +85,7 @@ class ServerConfig:
             request_timeout_seconds=float(section.get("request_timeout_seconds", 120)),
             max_timeout_seconds=float(section.get("max_timeout_seconds", 300)),
             max_markdown_chars=int(section.get("max_markdown_chars", 100_000)),
+            max_pdf_bytes=int(section.get("max_pdf_bytes", 15 * 1024 * 1024)),
             delay_before_return_html=float(section.get("delay_before_return_html", 2.5)),
             transport="streamable-http",
             host=str(service.get("host", "0.0.0.0")),

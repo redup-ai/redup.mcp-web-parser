@@ -20,15 +20,21 @@ MCP Streamable HTTP service that parses web pages into cleaned markdown via
 - Targeted at Crawl4AI **0.8.x** (per-request `proxy_config` works). On 0.9+
   Docker API may reject `proxy` / `proxy_config` in the request body.
 
-Contract: MCP tools `parse_page`, `check_upstream`.
+Contract: MCP tools `parse_page`, `fetch_pdf`, `check_upstream`.
 Endpoint: `POST http://<host>:8000/mcp` (stateless Streamable HTTP, JSON).
 Metrics: `GET http://<host>:9999/metrics` (Prometheus via `redup-servicekit`).
 
-**Tool args:** `parse_page` takes **`url`** (required), optional **`timeout`**
-(seconds). `check_upstream` has no args (`GET /health`).
+**Tool args:**
+- `parse_page` — **`url`**, optional **`timeout`**. HTML only via Crawl4AI.
+  If the URL is a PDF (`Content-Type` / `.pdf`), returns `is_pdf=true` and a
+  clear hint to call `fetch_pdf` (no cryptic Crawl4AI anti-bot error).
+- `fetch_pdf` — **`url`**, optional **`timeout`**. Downloads the PDF over HTTP
+  (same `default_proxy` as crawl) and returns `content_base64` (capped by
+  `max_pdf_bytes`). Does not OCR/extract text.
+- `check_upstream` — no args (`GET /health`).
 
 **Agent registration example:** `{"id":"web-parser","url":"http://…:8000/mcp"}`
-→ LLM names `mcp__web-parser__parse_page`.
+→ LLM names `mcp__web-parser__parse_page` / `mcp__web-parser__fetch_pdf`.
 
 ## Configuration
 
@@ -50,6 +56,7 @@ McpWebParser:
   request_timeout_seconds: 120
   max_timeout_seconds: 300
   max_markdown_chars: 100000
+  max_pdf_bytes: 15728640
   delay_before_return_html: 2.5
   json_response: true
   stateless_http: true

@@ -108,7 +108,15 @@ async def test_parse_page_tool_schema_has_no_proxy_arg(
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/crawl"):
+        path = request.url.path
+        host = request.url.host
+        if host == "example.com" and request.method in {"HEAD", "GET"}:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html; charset=utf-8"},
+                content=b"<html></html>" if request.method == "GET" else b"",
+            )
+        if path.endswith("/crawl"):
             captured["body"] = json.loads(request.content.decode())
             return httpx.Response(
                 200,
@@ -140,10 +148,12 @@ async def test_parse_page_tool_schema_has_no_proxy_arg(
     server = create_server(config)
     tools = await server.get_tools()
     assert "parse_page" in tools
+    assert "fetch_pdf" in tools
     schema = tools["parse_page"].parameters
     props = (schema or {}).get("properties") or {}
     assert "proxy" not in props
     assert "url" in props
+    assert "proxy" not in ((tools["fetch_pdf"].parameters or {}).get("properties") or {})
 
     out = await tools["parse_page"].run({"url": "https://example.com/"})
     text = _tool_text(out)
@@ -153,3 +163,75 @@ async def test_parse_page_tool_schema_has_no_proxy_arg(
     )
     assert payload.get("success") is True
     assert payload.get("used_proxy") is True
+
+
+@pytest.mark.asyncio
+async def test_parse_page_rejects_pdf_clearly(
+    monkeypatch: pytest.MonkeyPatch, config: ServerConfig
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method in {"HEAD", "GET"}:
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/pdf"},
+                content=b"%PDF-1.4" if request.method == "GET" else b"",
+            )
+        return httpx.Response(500, text="should not crawl")
+
+    transport = _Transport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    server = create_server(config)
+    tools = await server.get_tools()
+    out = await tools["parse_page"].run(
+        {"url": "https://arxiv.org/pdf/2510.16927"}
+    )
+    payload = json.loads(_tool_text(out))
+    assert payload["success"] is False
+    assert payload["is_pdf"] is True
+    assert "fetch_pdf" in payload["error_message"]
+    assert payload["hint"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_pdf_returns_base64(
+    monkeypatch: pytest.MonkeyPatch, config: ServerConfig
+):
+    pdf_bytes = b"%PDF-1.4\n%fake\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="paper.pdf"',
+            },
+            content=pdf_bytes,
+        )
+
+    transport = _Transport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    server = create_server(config)
+    tools = await server.get_tools()
+    out = await tools["fetch_pdf"].run(
+        {"url": "https://example.com/docs/paper.pdf"}
+    )
+    payload = json.loads(_tool_text(out))
+    assert payload["success"] is True
+    assert payload["filename"] == "paper.pdf"
+    assert payload["size"] == len(pdf_bytes)
+    assert payload["content_base64"]
